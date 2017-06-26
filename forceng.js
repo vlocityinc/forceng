@@ -339,7 +339,11 @@ angular.module('forceng', [])
         data: obj.data
       })
         .success(function (data, status, headers, config) {
-          deferred.resolve(data);
+          var response = data;
+          if (response.data) {
+              response = response.data;
+          }
+          deferred.resolve(response);
         })
         .error(function (data, status, headers, config) {
           if (status === 401 && oauth.refresh_token) {
