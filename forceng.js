@@ -437,8 +437,11 @@ angular.module('forceng', [])
         params: obj.params,
         data: obj.data,
         timeout: 30000
-      }).then(function (data, status, headers, config) {
-          deferred.resolve(data);
+      }).then(function (response) {
+          if (response.data) {
+              response = response.data;
+          }
+          deferred.resolve(response);
         }, function (data, status, headers, config) {
           if ((status === 401 || status === 403) && oauth.refresh_token) {
             refreshToken()
