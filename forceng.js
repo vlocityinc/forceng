@@ -18,7 +18,7 @@ angular.module('forceng', [])
 
     // The force.com API version to use.
     // To override default, pass apiVersion in init(props)
-      apiVersion = 'v39.0',
+      apiVersion = 'v45.0', //updated to Winter '19
 
     // Keep track of OAuth data (access_token, refresh_token, and instance_url)
       oauth,
@@ -37,7 +37,7 @@ angular.module('forceng', [])
 
     // Only required when using REST APIs in an app hosted on your own server to avoid cross domain policy issues
     // To override default, pass proxyURL in init(props)
-      proxyURL,
+      proxyURL = baseURL,
 
     // if page URL is http://localhost:3000/myapp/index.html, oauthCallbackURL is http://localhost:3000/myapp/oauthcallback.html
     // To override default, pass oauthCallbackURL in init(props)
@@ -46,21 +46,18 @@ angular.module('forceng', [])
     // Because the OAuth login spans multiple processes, we need to keep the login success and error handlers as a variables
     // inside the module instead of keeping them local within the login function.
       deferredLogin,
-        
+
       deferredLogout,
 
     // Reference to the Salesforce OAuth plugin
       oauthPlugin,
-    
-    // Reference to the Salesforce Network plugin
-      networkPlugin,    
 
-    // Flag for isVisualforce
-      visualforce = false,
+    // Reference to the Salesforce Network plugin
+      networkPlugin,
 
     // Whether or not to use a CORS proxy. Defaults to false if app running in Cordova or in a VF page
     // Can be overriden in init()
-      useProxy = (window.cordova || window.SfdcApp) ? false : true;
+      useProxy = (window.cordova || window.SfdcApp || window.sforce) ? false : true;
 
     /*
      * Determines the request base URL.
@@ -70,7 +67,7 @@ angular.module('forceng', [])
       var url;
 
       if (useProxy) {
-        url = proxyURL || baseURL;
+        url = proxyURL;
       } else if (oauth && oauth.instance_url) {
         url = oauth.instance_url;
       } else {
@@ -148,13 +145,13 @@ angular.module('forceng', [])
         url: url,
         params: params
       })
-        .then(function (data, status, headers, config) {
+        .then(function (response) {
           console.log('Token refreshed');
-          oauth.access_token = data.access_token;
+          oauth.access_token = response.data.access_token;
           tokenStore.forceOAuth = JSON.stringify(oauth);
           deferred.resolve();
         },
-        function (data, status, headers, config) {
+        function (response) {
           console.log('Error while trying to refresh token');
           deferred.reject();
         });
@@ -183,10 +180,6 @@ angular.module('forceng', [])
      *  refreshToken (optional)
      */
     function init(params) {
-      // To make sure salesforce is there or not
-      if(typeof (Visualforce) != "undefined"){
-        visualforce = true;
-      }
 
       if (params) {
         appId = params.appId || appId;
@@ -206,53 +199,26 @@ angular.module('forceng', [])
           oauth.instance_url = params.instanceURL;
         }else if(params.instanceUrl) {
           if (!oauth) oauth = {};
-          oauth.instance_url = params.instanceUrl;            
+          oauth.instance_url = params.instanceUrl;
         }else if(params.instance_url) {
           if (!oauth) oauth = {};
-          oauth.instance_url = params.instance_url;            
+          oauth.instance_url = params.instance_url;
         }
 
-        if(!(oauth && oauth.instance_url)) {
-            if (!oauth) oauth = {};
-          // location.hostname can be of the form 'abc.na1.visual.force.com',
-          // 'na1.salesforce.com' or 'abc.my.salesforce.com' (custom domains). 
-          // Split on '.', and take the [1] or [0] element as appropriate
-          var elements = location.hostname.split("."),
-              instance = null;
-          if (elements.length === 4 && elements[1] === 'my') {
-              instance = elements[0] + '.' + elements[1];
-          } else if (elements.length === 3) {
-              instance = elements[0];
-          } else {
-              instance = elements[1];
-          }
-
-          oauth.instance_url = "https://" + instance + ".salesforce.com";
-        }
-          
         if (params.refreshToken) {
           if (!oauth) oauth = {};
           oauth.refresh_token = params.refreshToken;
         }
 
-        // imitating similar approach by forcetk to handle apex rest inside org
-        if (proxyURL === undefined || proxyURL === null) {
-          if (location.protocol === 'file:' || location.protocol === 'ms-appx:') {
-              // In PhoneGap
-              proxyURL = null;
-          } else {
-              // In Visualforce - still need proxyUrl for Apex REST methods
-              proxyURL = "https://" + location.hostname
-                    + location.pathname.replace(/apex\/\w+/, "").replace(/\/$/, "")
-                    + "/services/proxy";
-          }
+        if (_.get(params, 'userId')) {
+          if (!oauth) oauth = {};
+          oauth.userId = params.userId;
         }
-
       }
 
       console.log("useProxy: " + useProxy);
     }
-    
+
     function getOAuth(){
         return oauth;
     }
@@ -312,20 +278,31 @@ angular.module('forceng', [])
           if (deferredLogin) deferredLogin.reject({status: 'Salesforce Mobile SDK OAuth plugin not available'});
           return;
         }
+
+        var authSuccess = function authSuccess(creds) {
+          // Initialize ForceJS
+          init({accessToken: creds.accessToken, instanceURL: creds.instanceUrl, refreshToken: creds.refreshToken, userId: creds.userId});
+          if (deferredLogin) deferredLogin.resolve(oauth);
+        };
+
+        var authFailure = function(error) {
+          console.log(error);
+          if (deferredLogin) deferredLogin.reject(error);
+        };
+
         oauthPlugin.getAuthCredentials(
-          function (creds) {
-            // Initialize ForceJS
-            init({accessToken: creds.accessToken, instanceURL: creds.instanceUrl, refreshToken: creds.refreshToken});
-            if (deferredLogin) deferredLogin.resolve(creds);
-          },
-          function (error) {
-            console.log(error);
-            if (deferredLogin) deferredLogin.reject(error);
+          authSuccess,
+          function() {
+              oauthPlugin.authenticate(
+                  authSuccess,
+                  authFailure
+              );
           }
         );
+        
       }, false);
     }
-  
+
     function loginWithBrowser() {
       console.log('loginURL: ' + loginURL);
       console.log('oauthCallbackURL: ' + oauthCallbackURL);
@@ -334,7 +311,7 @@ angular.module('forceng', [])
         oauthCallbackURL + '&response_type=token';
       window.open(loginWindowURL, '_blank', 'location=no');
     }
-    
+
     function logout(){
       deferredLogout = $q.defer();
       if (window.cordova) {
@@ -342,9 +319,9 @@ angular.module('forceng', [])
       } else {
         logoutWithBrowser();
       }
-      return deferredLogout.promise;        
+      return deferredLogout.promise;
     }
-    
+
     function logoutWithPlugin(){
       document.addEventListener("deviceready", function () {
         oauthPlugin = cordova.require("com.salesforce.plugin.oauth");
@@ -356,10 +333,10 @@ angular.module('forceng', [])
         //logout method doesn't support callbacks.
         oauthPlugin.logout();
         if (deferredLogout) deferredLogout.resolve();
-          
+
       }, false);
     }
-    
+
     function logoutWithBrowser(){
         if (deferredLogout) deferredLogout.resolve();
     }
@@ -369,7 +346,7 @@ angular.module('forceng', [])
      * @returns {string} | undefined
      */
     function getUserId() {
-        //oauth.id could be undefined. it will throw error. 
+        //oauth.id could be undefined. it will throw error.
         if(typeof(oauth) !== 'undefined') {
             if(oauth.id) {
                 return oauth.id.split('/').pop();
@@ -397,13 +374,13 @@ angular.module('forceng', [])
     function request(obj) {
         // NB: networkPlugin will be defined only if login was done through plugin and container is using Mobile SDK 5.0 or above
     // turn off CordovaNetwork request, because file:// and CORS issue in iOS10.
-        if (false && networkPlugin) { 
+        if (networkPlugin) {
             return requestWithPlugin(obj);
         } else {
             return requestWithBrowser(obj);
-        }   
+        }
     }
-  
+
     /**
      * @param path: full path or path relative to end point - required
      * @param endPoint: undefined or endpoint - optional
@@ -426,8 +403,8 @@ angular.module('forceng', [])
                 return {endPoint: '', path:path};
             }
         }
-    } 
-  
+    }
+
     function requestWithPlugin(obj) {
       var deferred = $q.defer();
       var obj2 = computeEndPointIfMissing(obj.endPoint, obj.path);
@@ -435,88 +412,126 @@ angular.module('forceng', [])
       networkPlugin.sendRequest(obj2.endPoint, obj2.path, function(data){
         //success
         deferred.resolve(data);
-      }, function(error){
+      }, function(errorResp){
         //failure
-        deferred.reject(error);
-      }, obj.method, obj.data || obj.params, obj.headerParams);    
-      
-      return deferred.promise;  
+        if (typeof errorResp === "string") {
+          // test if it is a json string
+          try {
+            errorResp = JSON.parse(errorResp);
+          } catch (e) {
+            var respArray = [];
+            respArray.push({
+              message: errorResp
+            })
+            errorResp = respArray;
+          }
+        }
+
+        // workaround to have consistent response format to request Calls
+        if (!Array.isArray(errorResp)) {
+          var respArray = []
+          respArray.push({
+            message: _.get(errorResp, 'NSLocalizedDescription', "Error encountered check error code"),
+            error: _.get(errorResp, 'error', "Check debug log")
+          });
+          errorResp['error'] = respArray;
+        }
+
+        deferred.reject(_.get(errorResp, 'error', errorResp));
+      }, obj.method, obj.data || obj.params, obj.headerParams);
+
+      return deferred.promise;
       }
 
-      function requestWithBrowser(obj) {
-        var method = obj.method || 'GET',
-          headers = {},
-          url = getRequestBaseURL(),
-          deferred = $q.defer();
-  
-        if(!useProxy && (!oauth || (!oauth.access_token && !oauth.refresh_token))) {
-          deferred.reject('No access token. Login and try again.');
-          return deferred.promise;
-        }
-  
-        // dev friendly API: Add leading '/' if missing so url + path concat always works
-        if (obj.path.charAt(0) !== '/') {
-          obj.path = '/' + obj.path;
-        }
-  
-        url = url + obj.path;
-  
-        if(oauth && oauth.access_token){
-           headers["Authorization"] = "Bearer " + oauth.access_token;   
-        }
-        if (obj.contentType) {
-          headers["Content-Type"] = obj.contentType;
-        }
-        if (useProxy && oauth && oauth.instance_url) {
-          headers["Target-URL"] = oauth.instance_url;
-        }
-  
-        //handle apexrest inside org
-        if (proxyURL !== null && !useProxy) {
-          headers['SalesforceProxy-Endpoint'] = url;
-        }
-  
-        headers['X-User-Agent'] = 'salesforce-toolkit-rest-javascript/' + apiVersion;
-  
-        $http({
-          headers: headers,
-          method: method,
-          url: (useProxy || !visualforce) ? url : proxyURL,
-          params: obj.params,
-          data: obj.data,
-          timeout: 30000
-        }).then(function (data, status, headers, config) {
-            deferred.resolve(data);
-          }, function (data, status, headers, config) {
-            if ((status === 401 || status === 403) && oauth.refresh_token) {
-              refreshToken()
-                .then(function () {
-                  // Try again with the new token
-                  requestWithBrowser(obj).then(function(data) {
-                      deferred.resolve(data);
-                  }, function(error){
-                      deferred.reject(error);
-                  });
-                }, function(){
-                  console.error(data);
-                  deferred.reject(data);
-              });
-            } else {
-                if (!data) {
-                  data = [{
-                        'errorCode': 'Request Error',
-                        'message': 'Can\'t connect to the server. Please try again!'
-  
-                   }];
-                }
-  
-              deferred.reject(data);
-            }
-  
-          });
-  
+    function requestWithBrowser(obj, shouldNotRefreshToken) {
+      var method = obj.method || 'GET',
+        headers = {},
+        url = getRequestBaseURL(),
+        deferred = $q.defer();
+
+      if (!oauth || (!oauth.access_token && !oauth.refresh_token)) {
+        deferred.reject('No access token. Login and try again.');
         return deferred.promise;
-    }
+      }
+
+      // dev friendly API: Add leading '/' if missing so url + path concat always works
+      if (obj.path.charAt(0) !== '/') {
+        obj.path = '/' + obj.path;
+      }
+
+      url = url + obj.path;
+
+      headers["Authorization"] = "Bearer " + oauth.access_token;
+      if (obj.contentType) {
+        headers["Content-Type"] = obj.contentType;
+      }
+      if (useProxy && oauth.instance_url) {
+        headers["Target-URL"] = oauth.instance_url;
+      }
+
+      $http({
+        headers: headers,
+        method: method,
+        url: url,
+        params: obj.params,
+        data: obj.data,
+        timeout: 115000
+      }).then(function (response) {
+          deferred.resolve(response.data);
+        }, function (response) {
+          if ((response.status === 401 || response.status === 403) && oauth.refresh_token) {
+
+            if (shouldNotRefreshToken) {
+              deferred.reject(response.data);
+              // skip refreshToken
+              return;
+            }
+
+            refreshToken()
+              .then(function () {
+                if (typeof (cookieMaster) !== 'undefined' &&  ionic && ionic.Platform.isIOS()) {
+                    cookieMaster.setCookieValue(oauth.instance_url, 'sid', oauth.access_token,
+                        function () {
+                            console.log('A cookie has been set');
+                        },
+                        function (error) {
+                            console.log('Error setting cookie: ' + error);
+                        });
+                }
+
+                // Try again with the new token
+                requestWithBrowser(obj, true).then(function(data) {
+                    deferred.resolve(data);
+                }, function(error){
+                    deferred.reject(error);
+                });
+              }, function(){
+
+                var res = [{
+                  'errorCode': 'Request Error or Timed Out',
+                  'message': "Refresh token expired."
+                }];
+                console.error(res);
+
+                deferred.reject(res);
+
+            });
+          } else {
+              if (!response) {
+                response = [{
+                      'errorCode': 'Request Error or Timed Out',
+                      'message': 'Server connection timeout! Please try again!'
+
+                 }];
+              }
+
+            deferred.reject(response.data);
+          }
+
+        });
+
+      return deferred.promise;
+  }
 
     /**
      * Execute SOQL query
@@ -532,33 +547,22 @@ angular.module('forceng', [])
 
     }
 
-     /**
-     * Execute SOSL Query
-     * @param sosl
-     * @returns {*}
-     */
-    function search(sosl) {
-
-      return request({
-        path: '/services/data/' + apiVersion + '/search',
-        params: {q: sosl}
-      });
-
-    }
-
-
     /**
      * Retrieve a record based on its Id
      * @param objectName
      * @param id
      * @param fields
+     * @param params // Used to pass in a param, such as nocache to avaid caching on http request
      * @returns {*}
      */
-    function retrieve(objectName, id, fields) {
-
+    function retrieve(objectName, id, fields, params) {
+      var params = params || {};
+      if (fields) {
+          params["fields"] = fields;
+      }
       return request({
         path: '/services/data/' + apiVersion + '/sobjects/' + objectName + '/' + id,
-        params: fields ? {fields: fields} : undefined
+        params: fields ? {fields: (typeof fields === "string" ? fields : fields.join(","))} : undefined
       });
 
     }
@@ -595,10 +599,9 @@ angular.module('forceng', [])
       delete fields.Id;
 
       return request({
-        method: 'POST',
+        method: 'PATCH',
         contentType: 'application/json',
         path: '/services/data/' + apiVersion + '/sobjects/' + objectName + '/' + id,
-        params: {'_HttpMethod': 'PATCH'},
         data: fields
       });
 
@@ -689,15 +692,19 @@ angular.module('forceng', [])
       return request(params);
 
     }
-    
+
     function getURLs() {
       return {proxyURL:proxyURL,oauthCallbackURL:oauthCallbackURL, useProxy: useProxy};
+    }
+
+    function isOnMobile() {
+      return true;
     }
 
     // The public API
     return {
       init: init,
-      getOAuth: getOAuth,        
+      getOAuth: getOAuth,
       login: login,
       logout: logout,
       getUserId: getUserId,
@@ -715,7 +722,7 @@ angular.module('forceng', [])
       oauthCallback: oauthCallback,
       requestBaseURL:getRequestBaseURL,
       getURLs: getURLs,
-      search:search
+      isOnMobile: isOnMobile
     };
 
   });
