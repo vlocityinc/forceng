@@ -212,22 +212,44 @@ angular.module('forceng', [])
           oauth.instance_url = params.instance_url;            
         }
 
-        if(!(oauth && oauth.instance_url)) {
-            if (!oauth) oauth = {};
-          // location.hostname can be of the form 'abc.na1.visual.force.com',
-          // 'na1.salesforce.com' or 'abc.my.salesforce.com' (custom domains). 
-          // Split on '.', and take the [1] or [0] element as appropriate
-          var elements = location.hostname.split("."),
-              instance = null;
-          if (elements.length === 4 && elements[1] === 'my') {
-              instance = elements[0] + '.' + elements[1];
-          } else if (elements.length === 3) {
-              instance = elements[0];
+        if (!(oauth && oauth.instance_url)) {
+          if (!oauth) oauth = {};
+          var bNoChange = false;
+          var elements = location.hostname.split(".");
+
+          var instance = null;
+          if (elements.length == 4 && elements[1] === 'my') {
+            instance = elements[0] + '.' + elements[1];
+          } else if (elements.length == 3) {
+            instance = elements[0];
+            var str1 = 'force.com';
+            var str2 = 'visual.force.com';
+            if (location.hostname.substring(location.hostname.length - str1.length, location.hostname.length) === str1 &&
+              location.hostname.substring(location.hostname.length - str2.length, location.hostname.length) !== str2) {
+              bNoChange = true;
+            }
           } else {
-              instance = elements[1];
+            instance = elements[1];
           }
 
           oauth.instance_url = "https://" + instance + ".salesforce.com";
+
+          if (bNoChange) {
+            oauth.instance_url = "https://" + location.hostname;
+
+            // vlc fix custom path
+            var customPath = '';
+            if (location.pathname !== undefined && location.pathname !== null) {
+              var pathList = location.pathname.split("/");
+              if (pathList !== undefined && pathList !== null && pathList.length > 1 && pathList[1] !== 'apex' &&
+                pathList[1] !== '') {
+                customPath = pathList[1];
+              }
+            }
+            if (customPath !== '') {
+              oauth.instance_url += '/' + customPath;
+            }
+          }
         }
           
         if (params.refreshToken) {
